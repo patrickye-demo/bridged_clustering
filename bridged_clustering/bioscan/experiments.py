@@ -1,7 +1,13 @@
-"""Forward and reversed BIOSCAN experiment routines."""
+"""Forward and reversed BIOSCAN experiment routines.
+
+These functions preserve the original BIOSCAN experiment semantics while
+delegating bridge construction, encoder use, and baseline evaluation to nearby
+helpers.
+"""
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 import numpy as np
@@ -9,22 +15,6 @@ import pandas as pd
 from sklearn.metrics import adjusted_mutual_info_score, mean_absolute_error, mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor
 
-from baseline import (
-    em_regression,
-    eot_barycentric_regression,
-    fixmatch_regression,
-    gcn_regression,
-    gw_metric_alignment_regression,
-    kernel_mean_matching_regression,
-    laprls_regression,
-    reversed_em_regression,
-    reversed_eot_barycentric_regression,
-    reversed_gw_metric_alignment_regression,
-    reversed_kernel_mean_matching_regression,
-    tnnr_regression,
-    tsvr_regression,
-    ucvme_regression,
-)
 from bridged_clustering.core import assign_by_centroids
 
 from .bridge import (
@@ -43,8 +33,46 @@ from .data import get_data_splits, load_dataset
 from .encoders import EncoderSuite, encode_genes_for_samples, encode_images_for_samples, load_encoder_suite
 
 
+_BASELINE_FUNCTION_NAMES: tuple[str, ...] = (
+    "em_regression",
+    "eot_barycentric_regression",
+    "fixmatch_regression",
+    "gcn_regression",
+    "gw_metric_alignment_regression",
+    "kernel_mean_matching_regression",
+    "laprls_regression",
+    "reversed_em_regression",
+    "reversed_eot_barycentric_regression",
+    "reversed_gw_metric_alignment_regression",
+    "reversed_kernel_mean_matching_regression",
+    "tnnr_regression",
+    "tsvr_regression",
+    "ucvme_regression",
+)
+
+
 def _resolve_encoder_suite(encoder_suite: EncoderSuite | None) -> EncoderSuite:
     return encoder_suite if encoder_suite is not None else load_encoder_suite()
+
+
+def _load_baseline_regressors() -> dict[str, Any]:
+    """Import the heavyweight baseline module only when an experiment actually runs."""
+    try:
+        baseline_module = import_module("baseline")
+    except ModuleNotFoundError as exc:
+        missing_name = f" '{exc.name}'" if getattr(exc, "name", None) else ""
+        raise ModuleNotFoundError(
+            "Missing dependency"
+            f"{missing_name} while loading BIOSCAN baselines. "
+            "Install packages from requirements.txt before running experiments.",
+        ) from exc
+
+    missing_functions = [name for name in _BASELINE_FUNCTION_NAMES if not hasattr(baseline_module, name)]
+    if missing_functions:
+        missing_str = ", ".join(sorted(missing_functions))
+        raise AttributeError(f"baseline.py is missing expected BIOSCAN regressors: {missing_str}")
+
+    return {name: getattr(baseline_module, name) for name in _BASELINE_FUNCTION_NAMES}
 
 
 def _swap_coordinate_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -71,6 +99,7 @@ def run_experiment(
     """Run the forward BIOSCAN experiment: image -> DNA."""
     rng = ensure_rng(rng)
     encoders = _resolve_encoder_suite(encoder_suite)
+    baselines = _load_baseline_regressors()
 
     df, images = load_dataset(csv_path, image_folder, n_families, n_samples, rng=rng)
     supervised_samples, input_only_df, gene_only_df, test_df = get_data_splits(
@@ -145,7 +174,7 @@ def run_experiment(
         n_neighbors=max(1, int(n_samples * supervised)),
     )
     print("starting fixmatch")
-    fixmatch_predictions, fixmatch_actuals = fixmatch_regression(
+    fixmatch_predictions, fixmatch_actuals = baselines["fixmatch_regression"](
         supervised_samples,
         input_only_df,
         test_df,
@@ -157,7 +186,7 @@ def run_experiment(
         conf_threshold=0.1,
     )
     print("starting laprls")
-    lap_predictions, lap_actuals = laprls_regression(
+    lap_predictions, lap_actuals = baselines["laprls_regression"](
         supervised_samples,
         input_only_df,
         test_df,
@@ -167,7 +196,7 @@ def run_experiment(
         sigma=2.0,
     )
     print("starting tsvr")
-    tsvr_predictions, tsvr_actuals = tsvr_regression(
+    tsvr_predictions, tsvr_actuals = baselines["tsvr_regression"](
         supervised_samples,
         input_only_df,
         test_df,
@@ -177,7 +206,7 @@ def run_experiment(
         gamma="scale",
     )
     print("starting tnnr")
-    tnnr_predictions, tnnr_actuals = tnnr_regression(
+    tnnr_predictions, tnnr_actuals = baselines["tnnr_regression"](
         supervised_samples,
         input_only_df,
         test_df,
@@ -186,7 +215,7 @@ def run_experiment(
         lr=0.0001,
     )
     print("starting ucvme")
-    ucv_predictions, ucv_actuals = ucvme_regression(
+    ucv_predictions, ucv_actuals = baselines["ucvme_regression"](
         supervised_samples,
         input_only_df,
         test_df,
@@ -195,7 +224,7 @@ def run_experiment(
         w_unl=10,
     )
     print("starting gcn")
-    gcn_predictions, gcn_actuals = gcn_regression(
+    gcn_predictions, gcn_actuals = baselines["gcn_regression"](
         supervised_samples,
         input_only_df,
         test_df,
@@ -204,7 +233,7 @@ def run_experiment(
         lr=0.003,
     )
     print("starting kernel mean matching baseline")
-    kmm_predictions, kmm_actuals = kernel_mean_matching_regression(
+    kmm_predictions, kmm_actuals = baselines["kernel_mean_matching_regression"](
         image_df=input_plus_supervised,
         gene_df=gene_plus_supervised,
         supervised_df=supervised_samples,
@@ -215,7 +244,7 @@ def run_experiment(
         sigma=1.0,
     )
     print("starting em regression")
-    em_predictions, em_actuals = em_regression(
+    em_predictions, em_actuals = baselines["em_regression"](
         supervised_df=supervised_samples,
         image_df=input_plus_supervised,
         gene_df=gene_plus_supervised,
@@ -226,7 +255,7 @@ def run_experiment(
         tol=0.0001,
     )
     print("starting eot barycentric regression")
-    eot_predictions, eot_actuals = eot_barycentric_regression(
+    eot_predictions, eot_actuals = baselines["eot_barycentric_regression"](
         supervised_df=supervised_samples,
         image_df=input_plus_supervised,
         gene_df=gene_plus_supervised,
@@ -237,7 +266,7 @@ def run_experiment(
         tol=1e-07,
     )
     print("starting gw metric alignment regression")
-    gw_predictions, gw_actuals = gw_metric_alignment_regression(
+    gw_predictions, gw_actuals = baselines["gw_metric_alignment_regression"](
         supervised_df=supervised_samples,
         image_df=input_plus_supervised,
         gene_df=gene_plus_supervised,
@@ -298,6 +327,7 @@ def run_reversed_experiment(
     """Run the reversed BIOSCAN experiment: DNA -> image."""
     rng = ensure_rng(rng)
     encoders = _resolve_encoder_suite(encoder_suite)
+    baselines = _load_baseline_regressors()
     if knn_neighbors is None:
         knn_neighbors = max(1, int(n_samples * supervised))
 
@@ -407,7 +437,7 @@ def run_reversed_experiment(
     knn.fit(x_train, y_train)
     knn_predictions = knn.predict(x_test)
 
-    kmm_predictions, kmm_actuals = reversed_kernel_mean_matching_regression(
+    kmm_predictions, kmm_actuals = baselines["reversed_kernel_mean_matching_regression"](
         gene_df=gene_plus_supervised,
         image_df=image_plus_supervised,
         supervised_df=supervised_df,
@@ -417,7 +447,7 @@ def run_reversed_experiment(
         kmm_eps=0.001,
         sigma=1.0,
     )
-    em_predictions, em_actuals = reversed_em_regression(
+    em_predictions, em_actuals = baselines["reversed_em_regression"](
         gene_df=gene_plus_supervised,
         image_df=image_plus_supervised,
         supervised_df=supervised_df,
@@ -427,7 +457,7 @@ def run_reversed_experiment(
         max_iter=2000,
         tol=0.0001,
     )
-    eot_predictions, eot_actuals = reversed_eot_barycentric_regression(
+    eot_predictions, eot_actuals = baselines["reversed_eot_barycentric_regression"](
         gene_df=gene_plus_supervised,
         image_df=image_plus_supervised,
         supervised_df=supervised_df,
@@ -437,7 +467,7 @@ def run_reversed_experiment(
         ridge_alpha=0.01,
         tol=1e-07,
     )
-    gw_predictions, gw_actuals = reversed_gw_metric_alignment_regression(
+    gw_predictions, gw_actuals = baselines["reversed_gw_metric_alignment_regression"](
         gene_df=gene_plus_supervised,
         image_df=image_plus_supervised,
         supervised_df=supervised_df,
@@ -450,7 +480,7 @@ def run_reversed_experiment(
     input_only_reverse = _swap_coordinate_columns(input_only_df)
     test_reverse = _swap_coordinate_columns(test_df)
 
-    fixmatch_predictions, fixmatch_actuals = fixmatch_regression(
+    fixmatch_predictions, fixmatch_actuals = baselines["fixmatch_regression"](
         supervised_reverse,
         input_only_reverse,
         test_reverse,
@@ -461,7 +491,7 @@ def run_reversed_experiment(
         lr=1e-3,
         rampup_length=30,
     )
-    lap_predictions, lap_actuals = laprls_regression(
+    lap_predictions, lap_actuals = baselines["laprls_regression"](
         supervised_reverse,
         input_only_reverse,
         test_reverse,
@@ -470,7 +500,7 @@ def run_reversed_experiment(
         k=20,
         sigma=2.0,
     )
-    tsvr_predictions, tsvr_actuals = tsvr_regression(
+    tsvr_predictions, tsvr_actuals = baselines["tsvr_regression"](
         supervised_reverse,
         input_only_reverse,
         test_reverse,
@@ -479,7 +509,7 @@ def run_reversed_experiment(
         self_training_frac=0.5,
         gamma="scale",
     )
-    tnnr_predictions, tnnr_actuals = tnnr_regression(
+    tnnr_predictions, tnnr_actuals = baselines["tnnr_regression"](
         supervised_reverse,
         input_only_reverse,
         test_reverse,
@@ -487,7 +517,7 @@ def run_reversed_experiment(
         beta=0.1,
         lr=0.0001,
     )
-    ucv_predictions, ucv_actuals = ucvme_regression(
+    ucv_predictions, ucv_actuals = baselines["ucvme_regression"](
         supervised_reverse,
         input_only_reverse,
         test_reverse,
@@ -495,7 +525,7 @@ def run_reversed_experiment(
         lr=0.0003,
         w_unl=10,
     )
-    gcn_predictions, gcn_actuals = gcn_regression(
+    gcn_predictions, gcn_actuals = baselines["gcn_regression"](
         supervised_reverse,
         input_only_reverse,
         test_reverse,

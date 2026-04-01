@@ -9,66 +9,78 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor
 
-from baseline import (
-    fixmatch_regression,
-    gcn_regression,
-    laprls_regression,
-    tnnr_regression,
-    tsvr_regression,
-    ucvme_regression,
-)
+from bridged_clustering._baseline_loader import load_baseline_regressors
 
 
 TextCandidateMap = dict[int, dict[str, np.ndarray | list[str]]]
 
-_TEXT_BASELINE_RUNNERS: dict[str, Callable[[pd.DataFrame, pd.DataFrame, pd.DataFrame], tuple[np.ndarray, np.ndarray]]] = {
-    "gcn_regression": lambda sup, ino, tst: gcn_regression(sup, ino, tst, dropout=0.1, hidden=32, lr=0.001),
-    "fixmatch_regression": lambda sup, ino, tst: fixmatch_regression(
-        sup,
-        ino,
-        tst,
-        alpha_ema=0.999,
-        batch_size=64,
-        conf_threshold=0.1,
-        lambda_u_max=0.5,
-        lr=0.0003,
-        rampup_length=30,
-    ),
-    "laprls_regression": lambda sup, ino, tst: laprls_regression(
-        sup,
-        ino,
-        tst,
-        gamma=0.001,
-        k=5,
-        lam=0.1,
-        sigma=2.0,
-    ),
-    "tsvr_regression": lambda sup, ino, tst: tsvr_regression(
-        sup,
-        ino,
-        tst,
-        C=10,
-        epsilon=0.01,
-        gamma="scale",
-        self_training_frac=0.1,
-    ),
-    "tnnr_regression": lambda sup, ino, tst: tnnr_regression(
-        sup,
-        ino,
-        tst,
-        beta=0.1,
-        lr=0.001,
-        rep_dim=128,
-    ),
-    "ucvme_regression": lambda sup, ino, tst: ucvme_regression(
-        sup,
-        ino,
-        tst,
-        lr=0.001,
-        mc_T=5,
-        w_unl=10,
-    ),
-}
+_TEXT_BASELINE_FUNCTION_NAMES: tuple[str, ...] = (
+    "fixmatch_regression",
+    "gcn_regression",
+    "laprls_regression",
+    "tnnr_regression",
+    "tsvr_regression",
+    "ucvme_regression",
+)
+
+
+def _text_baseline_runners() -> dict[str, Callable[[pd.DataFrame, pd.DataFrame, pd.DataFrame], tuple[np.ndarray, np.ndarray]]]:
+    baselines = load_baseline_regressors(_TEXT_BASELINE_FUNCTION_NAMES)
+    return {
+        "gcn_regression": lambda sup, ino, tst: baselines["gcn_regression"](
+            sup,
+            ino,
+            tst,
+            dropout=0.1,
+            hidden=32,
+            lr=0.001,
+        ),
+        "fixmatch_regression": lambda sup, ino, tst: baselines["fixmatch_regression"](
+            sup,
+            ino,
+            tst,
+            alpha_ema=0.999,
+            batch_size=64,
+            conf_threshold=0.1,
+            lambda_u_max=0.5,
+            lr=0.0003,
+            rampup_length=30,
+        ),
+        "laprls_regression": lambda sup, ino, tst: baselines["laprls_regression"](
+            sup,
+            ino,
+            tst,
+            gamma=0.001,
+            k=5,
+            lam=0.1,
+            sigma=2.0,
+        ),
+        "tsvr_regression": lambda sup, ino, tst: baselines["tsvr_regression"](
+            sup,
+            ino,
+            tst,
+            C=10,
+            epsilon=0.01,
+            gamma="scale",
+            self_training_frac=0.1,
+        ),
+        "tnnr_regression": lambda sup, ino, tst: baselines["tnnr_regression"](
+            sup,
+            ino,
+            tst,
+            beta=0.1,
+            lr=0.001,
+            rep_dim=128,
+        ),
+        "ucvme_regression": lambda sup, ino, tst: baselines["ucvme_regression"](
+            sup,
+            ino,
+            tst,
+            lr=0.001,
+            mc_T=5,
+            w_unl=10,
+        ),
+    }
 
 
 def build_candidate_map(
@@ -174,7 +186,7 @@ def wrap_text_baseline(
     input_only = input_only_df.rename(columns={input_column: "morph_coordinates", output_column: "gene_coordinates"})
     test = test_df.rename(columns={input_column: "morph_coordinates", output_column: "gene_coordinates"})
 
-    runner = _TEXT_BASELINE_RUNNERS.get(baseline_fn.__name__)
+    runner = _text_baseline_runners().get(baseline_fn.__name__)
     if runner is None:
         raise ValueError(f"Unknown baseline function: {baseline_fn.__name__}")
 

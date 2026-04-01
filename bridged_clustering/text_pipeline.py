@@ -1,4 +1,9 @@
-"""Shared orchestration for the image-text Bridged Clustering experiments."""
+"""Shared image-text experiment runner.
+
+This module keeps the dataset scripts thin: it calls the core Bridged
+Clustering primitives, evaluates the baseline regressors, and returns metrics in
+the legacy format expected by the analysis notebook.
+"""
 
 from __future__ import annotations
 
@@ -7,22 +12,7 @@ import pandas as pd
 from sklearn.metrics import adjusted_mutual_info_score, mean_absolute_error, mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor
 
-from baseline import (
-    em_regression,
-    eot_barycentric_regression,
-    fixmatch_regression,
-    gcn_regression,
-    gw_metric_alignment_regression,
-    kernel_mean_matching_regression,
-    laprls_regression,
-    reversed_em_regression,
-    reversed_eot_barycentric_regression,
-    reversed_gw_metric_alignment_regression,
-    reversed_kernel_mean_matching_regression,
-    tnnr_regression,
-    tsvr_regression,
-    ucvme_regression,
-)
+from bridged_clustering._baseline_loader import load_baseline_regressors
 from bridged_clustering.core import (
     assign_by_centroids,
     build_decision_matrix,
@@ -41,6 +31,23 @@ from bridged_clustering.text import (
     evaluate_regression_loss,
     knn_text_regression,
     wrap_text_baseline,
+)
+
+_TEXT_PIPELINE_BASELINE_NAMES: tuple[str, ...] = (
+    "em_regression",
+    "eot_barycentric_regression",
+    "fixmatch_regression",
+    "gcn_regression",
+    "gw_metric_alignment_regression",
+    "kernel_mean_matching_regression",
+    "laprls_regression",
+    "reversed_em_regression",
+    "reversed_eot_barycentric_regression",
+    "reversed_gw_metric_alignment_regression",
+    "reversed_kernel_mean_matching_regression",
+    "tnnr_regression",
+    "tsvr_regression",
+    "ucvme_regression",
 )
 
 
@@ -92,6 +99,7 @@ def run_forward_text_experiment(
     seed: int | None = None,
     mode: str = "transductive",
 ) -> dict[str, dict]:
+    baselines = load_baseline_regressors(_TEXT_PIPELINE_BASELINE_NAMES)
     supervised_df, input_only_df, output_only_df, test_df, input_pool, output_pool = split_by_cluster(
         df,
         supervised_ratio,
@@ -142,12 +150,12 @@ def run_forward_text_experiment(
     }
 
     for model_name, baseline_fn in (
-        ("FixMatch", fixmatch_regression),
-        ("LapRLS", laprls_regression),
-        ("TSVR", tsvr_regression),
-        ("TNNR", tnnr_regression),
-        ("UCVME", ucvme_regression),
-        ("GCN", gcn_regression),
+        ("FixMatch", baselines["fixmatch_regression"]),
+        ("Laplacian RLS", baselines["laprls_regression"]),
+        ("TSVR", baselines["tsvr_regression"]),
+        ("TNNR", baselines["tnnr_regression"]),
+        ("UCVME", baselines["ucvme_regression"]),
+        ("GCN", baselines["gcn_regression"]),
     ):
         predictions, _, actual_texts, predicted_texts = wrap_text_baseline(
             baseline_fn,
@@ -168,7 +176,7 @@ def run_forward_text_experiment(
     reference_embeddings = np.vstack(supervised_df["yv"])
     reference_texts = supervised_df["y"].tolist()
 
-    kmm_predictions, _ = kernel_mean_matching_regression(
+    kmm_predictions, _ = baselines["kernel_mean_matching_regression"](
         image_df=input_transport,
         gene_df=output_transport,
         supervised_df=supervised_transport,
@@ -179,7 +187,7 @@ def run_forward_text_experiment(
     kmm_mae, kmm_mse = _score_forward_predictions(kmm_predictions, kmm_texts, test_df, corpus)
     baseline_metrics["KMM"] = {"MAE": kmm_mae, "MSE": kmm_mse}
 
-    em_predictions, _ = em_regression(
+    em_predictions, _ = baselines["em_regression"](
         supervised_df=supervised_transport,
         image_df=input_transport,
         gene_df=output_transport,
@@ -191,7 +199,7 @@ def run_forward_text_experiment(
     em_mae, em_mse = _score_forward_predictions(em_predictions, em_texts, test_df, corpus)
     baseline_metrics["EM"] = {"MAE": em_mae, "MSE": em_mse}
 
-    eot_predictions, _ = eot_barycentric_regression(
+    eot_predictions, _ = baselines["eot_barycentric_regression"](
         supervised_df=supervised_transport,
         image_df=input_transport,
         gene_df=output_transport,
@@ -202,7 +210,7 @@ def run_forward_text_experiment(
     eot_mae, eot_mse = _score_forward_predictions(eot_predictions, eot_texts, test_df, corpus)
     baseline_metrics["EOT"] = {"MAE": eot_mae, "MSE": eot_mse}
 
-    gw_predictions, _ = gw_metric_alignment_regression(
+    gw_predictions, _ = baselines["gw_metric_alignment_regression"](
         supervised_df=supervised_transport,
         image_df=input_transport,
         gene_df=output_transport,
@@ -234,6 +242,7 @@ def run_reversed_text_experiment(
     seed: int | None = None,
     mode: str = "transductive",
 ) -> dict[str, dict]:
+    baselines = load_baseline_regressors(_TEXT_PIPELINE_BASELINE_NAMES)
     supervised_df, input_only_df, output_only_df, test_df, input_pool, output_pool = split_by_cluster(
         df,
         supervised_ratio,
@@ -322,8 +331,7 @@ def run_reversed_text_experiment(
     test_actuals = np.vstack(test_reverse["gene_coordinates"]) if len(test_reverse) else np.zeros_like(knn_predictions)
 
     numeric_predictions = {
-        "GCN": gcn_regression(supervised_reverse, input_only_reverse, test_reverse, hidden=32, dropout=0.1, lr=0.001),
-        "FixMatch": fixmatch_regression(
+        "FixMatch": baselines["fixmatch_regression"](
             supervised_reverse,
             input_only_reverse,
             test_reverse,
@@ -334,7 +342,7 @@ def run_reversed_text_experiment(
             lr=3e-4,
             rampup_length=10,
         ),
-        "LapRLS": laprls_regression(
+        "Laplacian RLS": baselines["laprls_regression"](
             supervised_reverse,
             input_only_reverse,
             test_reverse,
@@ -343,7 +351,7 @@ def run_reversed_text_experiment(
             lam=0.001,
             sigma=2.0,
         ),
-        "TSVR": tsvr_regression(
+        "TSVR": baselines["tsvr_regression"](
             supervised_reverse,
             input_only_reverse,
             test_reverse,
@@ -352,7 +360,7 @@ def run_reversed_text_experiment(
             gamma="scale",
             self_training_frac=0.5,
         ),
-        "TNNR": tnnr_regression(
+        "TNNR": baselines["tnnr_regression"](
             supervised_reverse,
             input_only_reverse,
             test_reverse,
@@ -360,13 +368,21 @@ def run_reversed_text_experiment(
             lr=0.001,
             rep_dim=128,
         ),
-        "UCVME": ucvme_regression(
+        "UCVME": baselines["ucvme_regression"](
             supervised_reverse,
             input_only_reverse,
             test_reverse,
             lr=3e-4,
             mc_T=5,
             w_unl=1.0,
+        ),
+        "GCN": baselines["gcn_regression"](
+            supervised_reverse,
+            input_only_reverse,
+            test_reverse,
+            hidden=32,
+            dropout=0.1,
+            lr=0.001,
         ),
     }
 
@@ -375,14 +391,14 @@ def run_reversed_text_experiment(
     reverse_supervised = supervised_df.rename(columns={"yv": "gene_coordinates", "x": "morph_coordinates"}).copy()
     reverse_test = test_df.rename(columns={"yv": "gene_coordinates", "x": "morph_coordinates"}).copy()
 
-    kmm_predictions, kmm_actuals = reversed_kernel_mean_matching_regression(
+    kmm_predictions, kmm_actuals = baselines["reversed_kernel_mean_matching_regression"](
         gene_df=reverse_gene_pool,
         image_df=reverse_image_pool,
         supervised_df=reverse_supervised,
         inference_df=reverse_test,
         **spec.reverse_transport.kmm,
     )
-    em_predictions, em_actuals = reversed_em_regression(
+    em_predictions, em_actuals = baselines["reversed_em_regression"](
         gene_df=reverse_gene_pool,
         image_df=reverse_image_pool,
         supervised_df=reverse_supervised,
@@ -390,14 +406,14 @@ def run_reversed_text_experiment(
         n_components=K,
         **spec.reverse_transport.em,
     )
-    eot_predictions, eot_actuals = reversed_eot_barycentric_regression(
+    eot_predictions, eot_actuals = baselines["reversed_eot_barycentric_regression"](
         gene_df=reverse_gene_pool,
         image_df=reverse_image_pool,
         supervised_df=reverse_supervised,
         inference_df=reverse_test,
         **spec.reverse_transport.eot,
     )
-    gw_predictions, gw_actuals = reversed_gw_metric_alignment_regression(
+    gw_predictions, gw_actuals = baselines["reversed_gw_metric_alignment_regression"](
         gene_df=reverse_gene_pool,
         image_df=reverse_image_pool,
         supervised_df=reverse_supervised,

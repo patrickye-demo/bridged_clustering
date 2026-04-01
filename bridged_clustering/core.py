@@ -1,4 +1,9 @@
-"""Reusable Bridged Clustering primitives shared across experiments."""
+"""Algorithmic core of Bridged Clustering.
+
+If you want to inspect the method itself, start here. This module contains the
+cluster-wise split, balanced clustering, bridge estimation, oracle comparison,
+and centroid-based inference reused by the experiment scripts.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +11,23 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from k_means_constrained import KMeansConstrained
 from sklearn.metrics import davies_bouldin_score, pairwise_distances, silhouette_score
+
+try:
+    from k_means_constrained import KMeansConstrained
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in dependency-light environments
+    KMeansConstrained = None
+    _KMEANS_CONSTRAINED_IMPORT_ERROR = exc
+else:
+    _KMEANS_CONSTRAINED_IMPORT_ERROR = None
+
+
+def _require_kmeans_constrained() -> None:
+    if KMeansConstrained is None:
+        raise ModuleNotFoundError(
+            "k_means_constrained is required for Bridged Clustering. "
+            "Install packages from requirements.txt before running experiments.",
+        ) from _KMEANS_CONSTRAINED_IMPORT_ERROR
 
 
 def split_by_cluster(
@@ -19,7 +39,16 @@ def split_by_cluster(
     mode: str = "transductive",
     test_frac: float = 0.2,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split each semantic cluster into supervised, input-only, output-only, and test blocks."""
+    """Split a labelled semantic table into BC training and evaluation blocks.
+
+    The input DataFrame is expected to contain a semantic `cluster` column plus
+    the modality columns consumed downstream by the experiment scripts. The
+    return value is `(supervised, input_only, output_only, test, input_pool,
+    output_pool)`, where the last two pools append the supervised pairs to the
+    unmatched marginals. In transductive mode, the same remainder is used for
+    both inference and evaluation; in inductive mode, a held-out test slice is
+    carved from that remainder.
+    """
     del K  # kept for signature compatibility with the original scripts
     if mode not in {"transductive", "inductive"}:
         raise ValueError(f"Unsupported mode: {mode}")
@@ -48,6 +77,7 @@ def split_by_cluster(
         remainder = shuffled.iloc[n_supervised + n_output_only :]
 
         if mode == "transductive":
+            # The transductive setting evaluates on the same pool that remains available at inference time.
             input_only = remainder
             test = remainder
         else:
@@ -76,7 +106,13 @@ def fit_constrained_kmeans(
     random_state: int = 42,
     **kwargs,
 ) -> KMeansConstrained:
-    """Fit size-constrained KMeans with the same balancing logic used in the paper scripts."""
+    """Fit balanced KMeans on an embedding matrix.
+
+    `values` is a two-dimensional array of feature vectors. The cluster sizes
+    are constrained to differ by at most one sample, matching the balanced
+    clustering assumption used throughout the BC sweeps.
+    """
+    _require_kmeans_constrained()
     n_samples = values.shape[0]
     size_min = n_samples // n_clusters
     size_max = int(np.ceil(n_samples / n_clusters))
@@ -99,7 +135,12 @@ def perform_size_constrained_clustering(
     input_kmeans_kwargs: dict | None = None,
     output_kmeans_kwargs: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, KMeansConstrained, KMeansConstrained]:
-    """Cluster input and output pools independently with balanced KMeans."""
+    """Cluster the input and output marginals independently.
+
+    `input_pool` and `output_pool` are the two BC marginals after supervised
+    pairs have been appended. The function returns input labels, output labels,
+    and the two fitted constrained KMeans objects.
+    """
     input_kmeans_kwargs = input_kmeans_kwargs or {}
     output_kmeans_kwargs = output_kmeans_kwargs or {}
 
@@ -150,7 +191,7 @@ def clustering_quality_metrics(
 
 
 def decision_vector(sample: pd.DataFrame, x_column: str, y_column: str, dim: int = 5) -> np.ndarray:
-    """Majority-vote bridge from input clusters to output clusters."""
+    """Return the majority-vote bridge from input-cluster ids to output-cluster ids."""
     association = np.zeros((dim, dim), dtype=int)
     for i in range(dim):
         for j in range(dim):
@@ -168,7 +209,12 @@ def build_decision_matrix(
     output_clusters: np.ndarray,
     n_clusters: int,
 ) -> np.ndarray:
-    """Build the learned bridge using the supervised block appended to each clustering pool."""
+    """Estimate the BC bridge from the supervised pairs only.
+
+    The experiment code appends the supervised pairs to the end of both
+    clustering pools, so the final `n_supervised` labels correspond exactly to
+    those paired examples.
+    """
     n_supervised = len(supervised_samples)
     supervised_block = supervised_samples.copy()
     supervised_block["x_cluster"] = input_clusters[-n_supervised:]
@@ -183,7 +229,7 @@ def build_true_decision_vector(
     output_clusters: np.ndarray,
     n_clusters: int,
 ) -> np.ndarray:
-    """Oracle bridge obtained by majority-voting over the full pools."""
+    """Build the oracle bridge by majority-voting with the full labelled pools."""
     input_annotated = input_pool.copy()
     input_annotated["x_cluster"] = input_clusters
     output_annotated = output_pool.copy()
@@ -216,7 +262,12 @@ def compute_cluster_centroids(
     vector_column: str = "yv",
     text_column: str = "y",
 ) -> tuple[np.ndarray, list[str]]:
-    """Compute output centroids and representative text prototypes for each cluster."""
+    """Compute output-cluster centroids and nearest prototype texts.
+
+    The returned centroid matrix is the object used for BC prediction in the
+    output space; the companion text list provides a readable prototype for each
+    output cluster when the target modality is text.
+    """
     if output_pool.empty:
         raise ValueError("output_pool must contain at least one row")
 
@@ -253,7 +304,12 @@ def perform_bridge_inference(
     predicted_vector_column: str = "predicted_yv",
     predicted_text_column: str = "predicted_text",
 ) -> pd.DataFrame:
-    """Map test inputs through the learned bridge into output-space predictions."""
+    """Apply a learned bridge to inference samples.
+
+    `input_clusters` are the inferred cluster ids for `inference_samples`,
+    `decision` maps those ids into output-cluster ids, and `centroids` /
+    `text_prototypes` define the predicted output representatives.
+    """
     inference = inference_samples.copy()
     input_clusters = np.asarray(input_clusters, dtype=int)
     predicted_clusters = decision[input_clusters]

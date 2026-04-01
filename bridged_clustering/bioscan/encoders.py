@@ -26,11 +26,34 @@ class EncoderSuite:
     image_transform: transforms.Compose
 
 
+def _allow_remote_code() -> bool:
+    return os.environ.get("BRIDGED_CLUSTERING_ALLOW_REMOTE_CODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 def load_encoder_suite() -> EncoderSuite:
     """Load pretrained encoders used by the BIOSCAN experiments."""
     barcode_model_name = "bioscan-ml/BarcodeBERT"
-    barcode_tokenizer = AutoTokenizer.from_pretrained(barcode_model_name, trust_remote_code=True)
-    barcode_model = AutoModel.from_pretrained(barcode_model_name, trust_remote_code=True).to(DEVICE)
+    allow_remote_code = _allow_remote_code()
+    try:
+        barcode_tokenizer = AutoTokenizer.from_pretrained(
+            barcode_model_name,
+            trust_remote_code=allow_remote_code,
+        )
+        barcode_model = AutoModel.from_pretrained(
+            barcode_model_name,
+            trust_remote_code=allow_remote_code,
+        ).to(DEVICE)
+    except Exception as exc:  # pragma: no cover - depends on local HF state
+        if not allow_remote_code and "trust_remote_code" in str(exc):
+            raise RuntimeError(
+                "BarcodeBERT requires remote code. Review the model repository first, then rerun with "
+                "BRIDGED_CLUSTERING_ALLOW_REMOTE_CODE=1 to opt in explicitly.",
+            ) from exc
+        raise
 
     effnet_weights = EfficientNet_B0_Weights.IMAGENET1K_V1
     image_model = efficientnet_b0(weights=effnet_weights).to(DEVICE)
@@ -66,6 +89,7 @@ def encode_images(
 ) -> np.ndarray:
     """Encode image ids into morphology embeddings."""
     features: list[np.ndarray] = []
+    missing_ids: list[str] = []
     for process_id in image_ids:
         image_path = image_paths.get(process_id)
         if image_path and os.path.exists(image_path):
@@ -75,7 +99,13 @@ def encode_images(
                 output = model(image_tensor)
             features.append(output.squeeze().cpu().numpy())
         else:
-            print(f"Warning: Image {process_id} not found or invalid!")
+            missing_ids.append(str(process_id))
+    if missing_ids:
+        preview = ", ".join(missing_ids[:5])
+        raise FileNotFoundError(
+            "Missing BIOSCAN images for process ids: "
+            f"{preview}{'...' if len(missing_ids) > 5 else ''}.",
+        )
     return np.array(features)
 
 

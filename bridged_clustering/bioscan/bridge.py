@@ -6,11 +6,26 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from k_means_constrained import KMeansConstrained
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor
 
 from .encoders import encode_genes, encode_images
+
+try:
+    from k_means_constrained import KMeansConstrained
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in dependency-light environments
+    KMeansConstrained = None
+    _KMEANS_CONSTRAINED_IMPORT_ERROR = exc
+else:
+    _KMEANS_CONSTRAINED_IMPORT_ERROR = None
+
+
+def _require_kmeans_constrained() -> None:
+    if KMeansConstrained is None:
+        raise ModuleNotFoundError(
+            "k_means_constrained is required for BIOSCAN clustering. "
+            "Install packages from requirements.txt before running experiments.",
+        ) from _KMEANS_CONSTRAINED_IMPORT_ERROR
 
 
 def _cluster_size_bounds(n_samples: int, n_clusters: int) -> tuple[int, int]:
@@ -29,6 +44,7 @@ def perform_clustering(
     n_families: int,
 ) -> tuple[KMeansConstrained, KMeansConstrained, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Fit balanced KMeans on image and gene encodings."""
+    _require_kmeans_constrained()
     image_features = encode_images(image_samples["processid"].values, image_paths, image_model, image_transform)
     size_min, size_max = _cluster_size_bounds(len(image_samples), n_families)
     image_kmeans = KMeansConstrained(
@@ -38,7 +54,7 @@ def perform_clustering(
         random_state=42,
         max_iter=100,
     ).fit(image_features)
-    image_clusters = image_kmeans.predict(image_features)
+    image_clusters = image_kmeans.labels_
 
     gene_features = encode_genes(gene_samples["dna_barcode"].values, barcode_tokenizer, barcode_model)
     gene_size_min, gene_size_max = _cluster_size_bounds(len(gene_samples), n_families)
@@ -49,7 +65,7 @@ def perform_clustering(
         random_state=42,
         max_iter=100,
     ).fit(gene_features)
-    gene_clusters = gene_kmeans.predict(gene_features)
+    gene_clusters = gene_kmeans.labels_
 
     return image_kmeans, gene_kmeans, image_features, gene_features, image_clusters, gene_clusters
 

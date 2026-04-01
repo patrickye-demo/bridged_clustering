@@ -1,98 +1,59 @@
 # Bridged Clustering
 
-Reference code for Bridged Clustering (BC): a semi-supervised construction for learning cross-domain predictors from three sources of supervision:
+Bridged Clustering (BC) is a semi-supervised method for cross-domain prediction with a small paired set `S`, an input-only pool `X`, and an output-only pool `Y`.
+It targets the disjoint-data regime where most inputs and outputs are unpaired but still share latent semantic structure.
+The key idea is to cluster the two marginal spaces independently and use the paired subset only to learn a sparse bridge between clusters.
 
-- a small paired set `S`
-- an input-only pool `X`
-- an output-only pool `Y`
+## Start Here
 
-The central idea is simple. Cluster the two marginal spaces independently, use the paired set to recover a sparse bridge between clusters, and predict through the linked output cluster centroid.
+- [`bridged_clustering/core.py`]
+  Inspect the method itself: split construction, balanced clustering, bridge estimation, oracle comparison, and centroid-based inference.
+- [`bridged_clustering/text_pipeline.py`]
+  Shared image-text experiment runner used by Wikipedia, Flickr30k, and COCO.
+- [`bridged_clustering/bioscan/`]
+  BIOSCAN-specific stack for the image-DNA setting.
+- [`wiki.py`], [`flick.py`], [`coco.py`], [`bioscan.py`]
+  Canonical experiment drivers that write the legacy result tensors consumed by [`utils/plotting.ipynb`].
 
-## Repository Map
+## Method Overview
 
-- [`bridged_clustering/core.py`](/Users/PatrickYe/Desktop/bridged_clustering/bridged_clustering/core.py)
-  Core Bridged Clustering operations: splitting, balanced clustering, bridge estimation, centroid inference.
-- [`bridged_clustering/text_pipeline.py`](/Users/PatrickYe/Desktop/bridged_clustering/bridged_clustering/text_pipeline.py)
-  Shared orchestration for the image-text experiments.
-- [`bridged_clustering/bioscan/`](/Users/PatrickYe/Desktop/bridged_clustering/bridged_clustering/bioscan/__init__.py)
-  BIOSCAN-specific stack: family sampling, encoder loading, bridge helpers, experiment routines, and grid execution.
-- [`bridged_clustering/datasets/`](/Users/PatrickYe/Desktop/bridged_clustering/bridged_clustering/datasets/__init__.py)
-  Dataset preparation for Wikipedia, Flickr30k, and COCO.
-- [`bridged_clustering/structures.py`](/Users/PatrickYe/Desktop/bridged_clustering/bridged_clustering/structures.py)
-  Experiment specs, corpus descriptors, and model ordering.
-- [`bridged_clustering/result_store.py`](/Users/PatrickYe/Desktop/bridged_clustering/bridged_clustering/result_store.py)
-  Result buffers for the grid sweeps.
-- [`baseline.py`](/Users/PatrickYe/Desktop/bridged_clustering/baseline.py)
-  Baseline regressors used throughout the experiments.
-- [`wiki.py`](/Users/PatrickYe/Desktop/bridged_clustering/wiki.py), [`flick.py`](/Users/PatrickYe/Desktop/bridged_clustering/flick.py), [`coco.py`](/Users/PatrickYe/Desktop/bridged_clustering/coco.py), [`bioscan.py`](/Users/PatrickYe/Desktop/bridged_clustering/bioscan.py)
-  Dataset entry points and experiment grids.
+- Split each semantic group into supervised pairs, unmatched input-only examples, unmatched output-only examples, and evaluation examples.
+- Fit size-constrained KMeans independently in the input and output spaces.
+- Estimate a discrete bridge from input clusters to output clusters using only the paired subset.
+- Predict by routing each test input through its input cluster to an output centroid or prototype.
 
-## How The Text Stack Is Organized
+## Canonical Commands
 
-The image-text experiments are split into four layers.
-
-1. Dataset preparation
-   Corpus-specific parsing, pruning, and candidate construction live under `bridged_clustering/datasets/`.
-2. Algorithmic core
-   The BC mechanics live in `bridged_clustering/core.py`.
-3. Experiment orchestration
-   Shared forward and reversed evaluation flows live in `bridged_clustering/text_pipeline.py`.
-4. Script entry points
-   The top-level scripts define the paper-style grids and write results.
-
-That separation keeps the dataset logic close to the data, the clustering logic easy to audit, and the entry points short enough to read quickly.
-
-The BIOSCAN path follows the same idea, but in its own package because it has a different vertical slice: image and DNA encoders, family-level sampling rules, and a separate forward/reversed evaluation stack.
-
-## Running Experiments
-
-Wikipedia:
+After `pip install -r requirements.txt`, the main entrypoints are:
 
 ```bash
 python wiki.py --mode transductive
-python wiki.py --mode inductive --reversed
-```
-
-Flickr30k:
-
-```bash
-python flick.py --mode transductive
-python flick.py --mode inductive --reversed
-```
-
-COCO:
-
-```bash
-python coco.py --mode transductive
 python coco.py --mode inductive --reversed
+BRIDGED_CLUSTERING_ALLOW_REMOTE_CODE=1 python bioscan.py --mode transductive
 ```
 
-BIOSCAN:
-
-```bash
-python bioscan.py --mode transductive
-python bioscan.py --mode inductive --reversed
-```
-
-Each run writes NumPy arrays for clustering quality and regression metrics into `results/<experiment_key>/`.
+Each run writes `ami_x.npy`, `ami_y.npy`, `accuracy.npy`, `mae.npy`, and `mse.npy` into `results/<experiment_key>/`.
 
 ## Dependencies
 
-The code assumes Python 3.10+ and the same library stack used in the experiments:
+The code assumes Python 3.10+.
+
+The main dependencies in `requirements.txt` are:
 
 - `numpy`, `pandas`, `scikit-learn`
 - `torch`, `torchvision`, `torch-geometric`
 - `transformers`, `sentence-transformers`, `datasets`
+- `adapt`
 - `k-means-constrained`
 - `POT`
 - `ortools`
 - `matplotlib`, `tqdm`, `Pillow`
+- `pyarrow`
 
 Large datasets are expected under `data/`. Generated outputs are written to `results/`.
 
-## Reproducibility
+For BIOSCAN, `bioscan-ml/BarcodeBERT` may require remote-code loading from Hugging Face. The loader requires an explicit opt-in:
 
-- Grid sweeps use explicit seeds.
-- Dataset preparation is deterministic given the sampled subset and seed.
-- The text scripts keep dataset-specific hyperparameters in one place via experiment specs.
-- Tooling configuration lives in [`pyproject.toml`](/Users/PatrickYe/Desktop/bridged_clustering/pyproject.toml), and generated artifacts are excluded via [`.gitignore`](/Users/PatrickYe/Desktop/bridged_clustering/.gitignore).
+```bash
+BRIDGED_CLUSTERING_ALLOW_REMOTE_CODE=1 python bioscan.py --mode transductive
+```

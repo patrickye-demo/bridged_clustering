@@ -1,4 +1,9 @@
-"""CLI and grid runner for BIOSCAN experiments."""
+"""CLI and paper-style grid runner for BIOSCAN.
+
+This is the canonical BIOSCAN entrypoint behind `python bioscan.py ...`. It
+loads the encoders once, executes the legacy sweep, and writes the legacy
+result tensors expected by the analysis notebook.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +13,6 @@ from pathlib import Path
 import numpy as np
 
 from .config import BioscanGridSpec, BioscanPaths
-from .encoders import load_encoder_suite
-from .experiments import run_experiment, run_reversed_experiment
-from .results import BioscanMetricStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +31,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _grid_seed(
+    family_index: int,
+    sample_index: int,
+    supervision_index: int,
+    out_only_index: int,
+    trial_index: int,
+    *,
+    grid: BioscanGridSpec,
+) -> int:
+    return trial_index + grid.n_trials * (
+        out_only_index
+        + len(grid.out_only_values)
+        * (
+            supervision_index
+            + len(grid.supervised_values) * (sample_index + len(grid.n_samples_values) * family_index)
+        )
+    )
+
+
 def run_bioscan_grid(
     *,
     mode: str = "transductive",
@@ -36,28 +57,54 @@ def run_bioscan_grid(
     paths: BioscanPaths | None = None,
     grid: BioscanGridSpec | None = None,
 ) -> Path:
+    try:
+        from .encoders import load_encoder_suite
+        from .experiments import run_experiment, run_reversed_experiment
+        from .results import BioscanMetricStore
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Missing dependency while running BIOSCAN experiments. Install packages from requirements.txt.",
+        ) from exc
+
     paths = paths or BioscanPaths()
     grid = grid or BioscanGridSpec()
 
     runner = run_reversed_experiment if reversed_direction else run_experiment
-    prefix = "402_bioscan_rev" if reversed_direction else "401_bioscan"
+    prefix = "102_bioscan_rev" if reversed_direction else "101_bioscan"
     experiment_key = f"{prefix}_tran" if mode == "transductive" else f"{prefix}_ind"
     output_dir = Path("results") / experiment_key
 
     encoder_suite = load_encoder_suite()
     results = BioscanMetricStore.allocate(grid)
+    grid_seeds = [
+        _grid_seed(
+            family_index,
+            sample_index,
+            supervision_index,
+            out_only_index,
+            trial_index,
+            grid=grid,
+        )
+        for family_index, _ in enumerate(grid.n_families_values)
+        for sample_index, _ in enumerate(grid.n_samples_values)
+        for supervision_index, _ in enumerate(grid.supervised_values)
+        for out_only_index, _ in enumerate(grid.out_only_values)
+        for trial_index in range(grid.n_trials)
+    ]
+    assert len(grid_seeds) == len(set(grid_seeds))
 
     for family_index, n_families in enumerate(grid.n_families_values):
         for sample_index, n_samples in enumerate(grid.n_samples_values):
             for supervision_index, supervised in enumerate(grid.supervised_values):
                 for out_only_index, out_only in enumerate(grid.out_only_values):
                     for trial in range(grid.n_trials):
-                        seed = (
-                            trial
-                            + family_index * len(grid.n_samples_values) * len(grid.supervised_values) * len(grid.out_only_values)
-                            + sample_index * len(grid.supervised_values) * len(grid.out_only_values)
-                            + supervision_index * len(grid.out_only_values)
-                            + out_only_index
+                        seed = _grid_seed(
+                            family_index,
+                            sample_index,
+                            supervision_index,
+                            out_only_index,
+                            trial,
+                            grid=grid,
                         )
                         rng = np.random.default_rng(seed)
                         print(

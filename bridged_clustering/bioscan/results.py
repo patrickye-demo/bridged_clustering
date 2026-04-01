@@ -20,6 +20,14 @@ class BioscanMetricStore:
     ami_y: np.ndarray
     accuracy: np.ndarray
 
+    @staticmethod
+    def _legacy_view(array: np.ndarray) -> np.ndarray:
+        if array.ndim == 6 and array.shape[1] == 1 and array.shape[3] == 1:
+            return array[:, 0, :, 0, :, :]
+        if array.ndim == 5 and array.shape[1] == 1 and array.shape[3] == 1:
+            return array[:, 0, :, 0, :]
+        return array
+
     @classmethod
     def allocate(cls, grid: BioscanGridSpec) -> "BioscanMetricStore":
         shape_prefix = (
@@ -62,8 +70,8 @@ class BioscanMetricStore:
 
     def save(self, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        np.save(output_dir / "mae.npy", self.mae)
-        np.save(output_dir / "mse.npy", self.mse)
-        np.save(output_dir / "ami_x.npy", self.ami_x)
-        np.save(output_dir / "ami_y.npy", self.ami_y)
-        np.save(output_dir / "accuracy.npy", self.accuracy)
+        np.save(output_dir / "mae.npy", self._legacy_view(self.mae))
+        np.save(output_dir / "mse.npy", self._legacy_view(self.mse))
+        np.save(output_dir / "ami_x.npy", self._legacy_view(self.ami_x))
+        np.save(output_dir / "ami_y.npy", self._legacy_view(self.ami_y))
+        np.save(output_dir / "accuracy.npy", self._legacy_view(self.accuracy))
